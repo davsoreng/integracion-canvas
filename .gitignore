@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Credenciales y Secretos (NUNCA SUBIR)
+.env
+*.json
+!credentials.template.json
+token.json
+client_secrets.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Mac / Windows
+.DS_Store
+Thumbs.db
