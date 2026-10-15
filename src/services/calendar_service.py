@@ -8,7 +8,7 @@ from src.models.schemas import CanvasAssignment
 
 
 class CalendarService:
-    """Cliente para interactuar con Google Calendar API garantizando sincronización idempotente."""
+    """Cliente para interactuar con Google Calendar API con colores dinámicos por estado de entrega."""
 
     def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None, refresh_token: Optional[str] = None):
         c_id = client_id or settings.GOOGLE_CLIENT_ID
@@ -65,8 +65,10 @@ class CalendarService:
 
     def sync_assignment_event(self, course_name: str, assignment: CanvasAssignment) -> Tuple[str, Optional[str]]:
         """
-        Crea o actualiza un evento para una tarea de Canvas.
-        Retorna (estado, event_id) donde estado es 'skipped', 'created' o 'updated'.
+        Crea o actualiza un evento para una tarea de Canvas aplicando:
+        - Amarillo (colorId: '5') si está PENDIENTE.
+        - Verde (colorId: '10') si está ENTREGADA / CALIFICADA.
+        Retorna (estado, event_id) con estado en ('skipped', 'created', 'updated').
         """
         if not assignment.due_at:
             return "skipped", None
@@ -74,6 +76,12 @@ class CalendarService:
         cal_id = self.get_target_calendar_id()
         assignment_id_str = str(assignment.id)
         due_at_iso = assignment.due_at.isoformat()
+
+        # Determinar estado de entrega y color
+        is_delivered = assignment.is_submitted or assignment.submission_status in ("submitted", "graded")
+        color_id = "10" if is_delivered else "5"  # 10: Verde (Basil), 5: Amarillo (Banana)
+        status_label = "ENTREGADO ✅" if is_delivered else "PENDIENTE ⏳"
+        event_title = f"[{status_label}] [{course_name}] {assignment.name}"
 
         # 1. Comprobar si ya existe un evento para esta tarea usando privateExtendedProperty
         events_result = self.service.events().list(
@@ -83,27 +91,38 @@ class CalendarService:
         ).execute()
 
         existing_events = events_result.get("items", [])
-        
+
         # Calcular duración del evento: desde 1 hora antes hasta la hora de entrega
         start_dt = assignment.due_at - timedelta(hours=1)
         end_dt = assignment.due_at
 
-        # Construir descripción con enlaces
+        # Construir descripción detallada
         desc_parts = [
-            f"Asignatura: {course_name}",
-            f"Tarea: {assignment.name}"
+            f"📌 Asignatura: {course_name}",
+            f"📝 Tarea: {assignment.name}",
+            f"🚦 Estado: {'Entregada ✅' if is_delivered else 'Pendiente de entrega ⏳'}"
         ]
-        if assignment.points_possible is not None:
-            desc_parts.append(f"Puntuación máxima: {assignment.points_possible} pts")
+
+        if assignment.grade is not None:
+            desc_parts.append(f"⭐ Calificación: {assignment.grade}")
+        elif assignment.points_possible is not None:
+            desc_parts.append(f"🎯 Puntuación máxima: {assignment.points_possible} pts")
+
+        if assignment.summary_ai:
+            desc_parts.append(f"\n🧠 Resumen IA:\n{assignment.summary_ai}")
+
         if assignment.html_url:
-            desc_parts.append(f"\nAcceder a la tarea en Canvas:\n{assignment.html_url}")
-        
+            desc_parts.append(f"\n🔗 Enlace Canvas:\n{assignment.html_url}")
+
         description_text = "\n".join(desc_parts)
-        event_title = f"[{course_name}] Entrega: {assignment.name}"
+
+        current_submission_status = assignment.submission_status or ("submitted" if is_delivered else "unsubmitted")
+        current_grade_str = str(assignment.grade or "")
 
         event_body = {
             "summary": event_title,
             "description": description_text,
+            "colorId": color_id,
             "start": {
                 "dateTime": start_dt.isoformat(),
             },
@@ -120,7 +139,9 @@ class CalendarService:
             "extendedProperties": {
                 "private": {
                     "canvas_assignment_id": assignment_id_str,
-                    "canvas_due_at": due_at_iso
+                    "canvas_due_at": due_at_iso,
+                    "canvas_submission_status": current_submission_status,
+                    "canvas_grade": current_grade_str
                 }
             }
         }
@@ -130,18 +151,24 @@ class CalendarService:
             existing_id = existing["id"]
             ext_props = existing.get("extendedProperties", {}).get("private", {})
             saved_due_at = ext_props.get("canvas_due_at")
+            saved_status = ext_props.get("canvas_submission_status")
+            saved_grade = ext_props.get("canvas_grade", "")
+            saved_color = existing.get("colorId")
 
-            # Si la fecha de entrega no ha cambiado, no tocar el evento
-            if saved_due_at == due_at_iso:
+            # Si nada relevante ha cambiado (ni fecha, ni estado de entrega, ni nota, ni color), omitir
+            if (saved_due_at == due_at_iso and
+                saved_status == current_submission_status and
+                saved_grade == current_grade_str and
+                saved_color == color_id):
                 return "skipped", existing_id
 
-            # Si la fecha cambió (el profesor extendió el plazo), actualizar
+            # Si el alumno entregó la tarea o el profesor cambió la fecha/nota, actualizar con patch
             updated = self.service.events().patch(
                 calendarId=cal_id,
                 eventId=existing_id,
                 body=event_body
             ).execute()
-            logger.info(f"Evento actualizado en Calendar: '{event_title}' (nueva fecha: {due_at_iso})")
+            logger.info(f"Evento actualizado en Calendar: '{event_title}' (Color: {'Verde' if is_delivered else 'Amarillo'})")
             return "updated", updated["id"]
 
         # Crear nuevo evento
@@ -150,5 +177,5 @@ class CalendarService:
             body=event_body
         ).execute()
 
-        logger.info(f"Evento creado en Calendar: '{event_title}' para {due_at_iso}")
+        logger.info(f"Evento creado en Calendar: '{event_title}' (Color: {'Verde' if is_delivered else 'Amarillo'})")
         return "created", created["id"]

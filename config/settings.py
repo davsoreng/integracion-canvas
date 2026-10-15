@@ -15,8 +15,12 @@ class Settings(BaseSettings):
     GOOGLE_REFRESH_TOKEN: str = ""
 
     # Google Drive & Calendar
-    DRIVE_ROOT_FOLDER_NAME: str = "Canvas_Academico"
+    DRIVE_ROOT_FOLDER_NAME: str = "INGENIERIA"
+    DRIVE_ROOT_FOLDER_ID: Optional[str] = "1lW4caVjGo5-NbQl7SCxwzB6nJAxOdZ1J"
     CALENDAR_NAME: str = "Canvas - Universidad"
+
+    # Gemini IA
+    GEMINI_API_KEY: Optional[str] = None
 
     # Seguridad del servicio
     SYNC_SECRET_TOKEN: Optional[str] = None
@@ -36,6 +40,9 @@ class Settings(BaseSettings):
 
     def is_google_configured(self) -> bool:
         return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET and self.GOOGLE_REFRESH_TOKEN)
+
+    def is_gemini_configured(self) -> bool:
+        return bool(self.GEMINI_API_KEY)
 
 
 settings = Settings()

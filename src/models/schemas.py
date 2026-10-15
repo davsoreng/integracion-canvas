@@ -18,6 +18,7 @@ class CanvasFile(BaseModel):
     size: int
     updated_at: Optional[str] = None
     content_type: Optional[str] = None
+    module_name: Optional[str] = None
 
 
 class CanvasAssignment(BaseModel):
@@ -28,6 +29,12 @@ class CanvasAssignment(BaseModel):
     due_at: Optional[datetime] = None
     html_url: Optional[str] = None
     points_possible: Optional[float] = None
+    submission_status: Optional[str] = "unsubmitted"  # "submitted", "graded", "unsubmitted"
+    is_submitted: bool = False
+    grade: Optional[str] = None
+    score: Optional[float] = None
+    submitted_at: Optional[datetime] = None
+    summary_ai: Optional[str] = None
 
 
 class SyncStats(BaseModel):

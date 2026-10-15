@@ -9,4 +9,5 @@ google-auth-oauthlib>=1.2.1
 google-auth-httplib2>=0.2.0
 python-dotenv>=1.0.1
 httpx>=0.28.0
+google-genai>=2.31.0
 pytest>=8.3.0

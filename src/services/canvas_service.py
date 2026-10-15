@@ -92,7 +92,20 @@ class CanvasService:
         return courses
 
     def get_course_files(self, course_id: int) -> List[CanvasFile]:
-        """Obtiene la lista de archivos disponibles en un curso."""
+        """Obtiene la lista de archivos disponibles en un curso, vinculándolos a su módulo si existe."""
+        # 1. Intentar mapear archivos a sus módulos (temas)
+        file_to_module: dict[int, str] = {}
+        try:
+            modules_url = f"{self.base_url}/api/v1/courses/{course_id}/modules"
+            raw_modules = self._paginate(modules_url, params={"include[]": "items", "per_page": 50})
+            for m in raw_modules:
+                mod_name = m.get("name", "").strip()
+                for item in m.get("items", []):
+                    if item.get("type") == "File" and item.get("content_id"):
+                        file_to_module[item["content_id"]] = mod_name
+        except Exception as me:
+            logger.debug(f"No se pudieron consultar módulos para el curso {course_id}: {me}")
+
         url = f"{self.base_url}/api/v1/courses/{course_id}/files"
         params = {"per_page": 100}
         try:
@@ -119,15 +132,16 @@ class CanvasService:
                 url=download_url,
                 size=f.get("size", 0),
                 updated_at=f.get("updated_at") or f.get("created_at"),
-                content_type=f.get("content-type") or f.get("mime_class")
+                content_type=f.get("content-type") or f.get("mime_class"),
+                module_name=file_to_module.get(file_id)
             ))
 
         return files
 
     def get_course_assignments(self, course_id: int) -> List[CanvasAssignment]:
-        """Obtiene las tareas y entregas del curso con fecha límite."""
+        """Obtiene las tareas y entregas del curso con fecha límite e información de entrega del alumno."""
         url = f"{self.base_url}/api/v1/courses/{course_id}/assignments"
-        params = {"per_page": 50}
+        params = {"per_page": 50, "include[]": "submission"}
         try:
             raw_assignments = self._paginate(url, params=params)
         except requests.HTTPError as e:
@@ -152,6 +166,20 @@ class CanvasService:
                 except ValueError:
                     pass
 
+            # Procesar datos de entrega (submission)
+            sub = a.get("submission") or {}
+            wf_state = sub.get("workflow_state", "unsubmitted")
+            is_sub = wf_state in ("submitted", "graded")
+            grade_val = str(sub.get("grade")) if sub.get("grade") is not None else None
+            score_val = float(sub.get("score")) if sub.get("score") is not None else None
+
+            sub_at_dt = None
+            if sub.get("submitted_at"):
+                try:
+                    sub_at_dt = datetime.fromisoformat(sub["submitted_at"].replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+
             assignments.append(CanvasAssignment(
                 id=assignment_id,
                 course_id=course_id,
@@ -159,7 +187,12 @@ class CanvasService:
                 description=a.get("description", ""),
                 due_at=due_at_dt,
                 html_url=a.get("html_url"),
-                points_possible=a.get("points_possible")
+                points_possible=a.get("points_possible"),
+                submission_status=wf_state,
+                is_submitted=is_sub,
+                grade=grade_val,
+                score=score_val,
+                submitted_at=sub_at_dt
             ))
 
         return assignments
