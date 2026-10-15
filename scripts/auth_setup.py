@@ -9,30 +9,74 @@ Este script se ejecuta localmente UNA SOLA VEZ para:
 
 import os
 import sys
+import urllib.parse
 from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 import dotenv
 
-# Scopes necesarios para gestionar archivos en Drive y eventos en Calendar
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/calendar"
 ]
 
 ENV_FILE_PATH = Path(__file__).resolve().parent.parent / ".env"
+received_code = None
+
+
+class OAuthCallbackHandler(BaseHTTPRequestHandler):
+    """Manejador HTTP para capturar la redirección de Google con el código de autorización."""
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        global received_code
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+
+        if "code" in params:
+            received_code = params["code"][0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            html = """
+            <!DOCTYPE html>
+            <html lang="es">
+            <head><meta charset="utf-8"><title>Autorización Exitosa</title></head>
+            <body style="font-family: -apple-system, sans-serif; text-align: center; padding: 50px; background: #f8f9fa;">
+                <div style="background: white; max-width: 450px; margin: auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                    <h1 style="color: #2e7d32; margin-top: 0;">✅ ¡Autorización Exitosa!</h1>
+                    <p style="color: #555; line-height: 1.5;">Tu cuenta de Google ha sido conectada correctamente con el Asistente Académico.</p>
+                    <p style="color: #888; font-size: 0.9em;">Ya puedes cerrar esta pestaña y volver al chat/terminal.</p>
+                </div>
+            </body>
+            </html>
+            """
+            self.wfile.write(html.encode("utf-8"))
+        else:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Error: No authorization code received.")
 
 
 def update_env_variable(key: str, value: str):
     """Actualiza o añade una variable en el archivo .env."""
     if not ENV_FILE_PATH.exists():
         ENV_FILE_PATH.touch()
-    
     dotenv.set_key(str(ENV_FILE_PATH), key, value)
     print(f"  [OK] Guardado en .env: {key}=***")
 
 
 def main():
+    global received_code
     print("=" * 60)
     print("   ASISTENTE ACADÉMICO: AUTORIZACIÓN GOOGLE OAUTH 2.0")
     print("=" * 60)
@@ -47,17 +91,8 @@ def main():
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 
     if not client_id or not client_secret:
-        print("No se encontraron GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en .env.")
-        print("Por favor, introduce los datos creados en Google Cloud Console:")
-        client_id = input("Introduce tu GOOGLE_CLIENT_ID: ").strip()
-        client_secret = input("Introduce tu GOOGLE_CLIENT_SECRET: ").strip()
-
-        if not client_id or not client_secret:
-            print("[ERROR] El Client ID y Client Secret son obligatorios.")
-            sys.exit(1)
-
-        update_env_variable("GOOGLE_CLIENT_ID", client_id)
-        update_env_variable("GOOGLE_CLIENT_SECRET", client_secret)
+        print("[ERROR] GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET son obligatorios en .env.")
+        sys.exit(1)
 
     client_config = {
         "installed": {
@@ -65,40 +100,75 @@ def main():
             "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost", "http://127.0.0.1"]
+            "redirect_uris": ["http://localhost:8085/"]
         }
     }
 
-    print("\n[INFO] Abriendo navegador para autorizar la aplicación...")
-    print("Si aparece una pantalla de advertencia 'Google no ha verificado esta app',")
-    print("haz clic en 'Avanzado' (o 'Configuración avanzada') y luego en 'Ir a Asistente Canvas (no seguro)'.")
-    print("Esto es normal ya que la app está en modo Testing para tu propio uso personal.\n")
+    local_port = 8085
+    redirect_uri = f"http://localhost:{local_port}/"
+
+    flow = InstalledAppFlow.from_client_config(
+        client_config,
+        scopes=SCOPES
+    )
+    flow.redirect_uri = redirect_uri
+
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        prompt="consent"
+    )
+
+    # Guardar en archivo para fácil lectura
+    url_file = Path(__file__).resolve().parent.parent / "AUTH_URL.txt"
+    with open(url_file, "w", encoding="utf-8") as f:
+        f.write(auth_url)
+
+    print("\n" + "=" * 60)
+    print("🔗 ENLACE DE AUTORIZACIÓN:")
+    print(auth_url)
+    print("=" * 60)
+    print("\n[INFO] Servidor local escuchando en http://localhost:8085/ esperando respuesta...")
+    sys.stdout.flush()
+
+    # Intentar abrir el navegador en la sesión de Windows
+    try:
+        os.system(f'start "" "{auth_url}"')
+    except Exception:
+        pass
 
     try:
-        flow = InstalledAppFlow.from_client_config(
-            client_config,
-            scopes=SCOPES
-        )
-        credentials = flow.run_local_server(
-            port=0,
-            access_type="offline",
-            prompt="consent",
-            success_message="¡Autorización completada con éxito! Ya puedes cerrar esta ventana."
-        )
+        # Levantar el servidor HTTP para recibir la redirección
+        server = HTTPServer(("localhost", local_port), OAuthCallbackHandler)
+        server.handle_request()  # Atiende exactamente una petición y continúa
 
+        if not received_code:
+            print("\n[ERROR] No se recibió ningún código de autorización.")
+            sys.exit(1)
+
+        print("\n[INFO] Código de autorización recibido. Solicitando refresh token...")
+        sys.stdout.flush()
+
+        flow.fetch_token(code=received_code)
+        credentials = flow.credentials
         refresh_token = credentials.refresh_token
 
         if not refresh_token:
             print("\n[ALERTA] No se recibió un refresh_token nuevo.")
             print("Si ya habías autorizado antes, revoca el acceso en https://myaccount.google.com/permissions")
-            print("o asegúrate de que prompt='consent' esté activo.")
+            sys.stdout.flush()
             return
 
         print("\n[ÉXITO] ¡Refresh Token obtenido correctamente!")
         update_env_variable("GOOGLE_REFRESH_TOKEN", refresh_token)
+        sys.stdout.flush()
+
+        # Limpiar archivo temporal si existe
+        if url_file.exists():
+            url_file.unlink(missing_ok=True)
 
         # Prueba de conexión rápida
         print("\n[INFO] Verificando acceso a Google Drive y Google Calendar...")
+        sys.stdout.flush()
         drive_service = build("drive", "v3", credentials=credentials)
         about = drive_service.about().get(fields="user, storageQuota").execute()
         user_name = about.get("user", {}).get("displayName", "Usuario")
@@ -112,6 +182,7 @@ def main():
         print("\n" + "=" * 60)
         print("  ¡TODO LISTO! Tus credenciales están guardadas en .env")
         print("=" * 60)
+        sys.stdout.flush()
 
     except Exception as e:
         print(f"\n[ERROR] Ocurrió un fallo durante la autorización: {e}")

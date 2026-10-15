@@ -14,6 +14,12 @@ def setup_logger(name: str = "canvas_sync") -> logging.Logger:
     level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
     logger.setLevel(level)
 
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
 
