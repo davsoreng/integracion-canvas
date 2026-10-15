@@ -192,7 +192,8 @@ class CanvasService:
                 is_submitted=is_sub,
                 grade=grade_val,
                 score=score_val,
-                submitted_at=sub_at_dt
+                submitted_at=sub_at_dt,
+                updated_at=a.get("updated_at")
             ))
 
         return assignments

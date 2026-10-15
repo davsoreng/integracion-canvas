@@ -35,6 +35,7 @@ class CanvasAssignment(BaseModel):
     score: Optional[float] = None
     submitted_at: Optional[datetime] = None
     summary_ai: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class SyncStats(BaseModel):

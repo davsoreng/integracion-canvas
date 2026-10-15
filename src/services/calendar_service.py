@@ -141,7 +141,8 @@ class CalendarService:
                     "canvas_assignment_id": assignment_id_str,
                     "canvas_due_at": due_at_iso,
                     "canvas_submission_status": current_submission_status,
-                    "canvas_grade": current_grade_str
+                    "canvas_grade": current_grade_str,
+                    "canvas_updated_at": str(assignment.updated_at or "")
                 }
             }
         }
@@ -153,13 +154,19 @@ class CalendarService:
             saved_due_at = ext_props.get("canvas_due_at")
             saved_status = ext_props.get("canvas_submission_status")
             saved_grade = ext_props.get("canvas_grade", "")
+            saved_updated_at = ext_props.get("canvas_updated_at", "")
+            saved_title = existing.get("summary")
+            saved_desc = existing.get("description")
             saved_color = existing.get("colorId")
 
-            # Si nada relevante ha cambiado (ni fecha, ni estado de entrega, ni nota, ni color), omitir
+            # Si nada ha cambiado (ni fecha, ni título, ni instrucciones, ni nota, ni estado), omitir
             if (saved_due_at == due_at_iso and
                 saved_status == current_submission_status and
                 saved_grade == current_grade_str and
-                saved_color == color_id):
+                saved_title == event_title and
+                saved_desc == description_text and
+                saved_color == color_id and
+                (not assignment.updated_at or saved_updated_at == str(assignment.updated_at))):
                 return "skipped", existing_id
 
             # Si el alumno entregó la tarea o el profesor cambió la fecha/nota, actualizar con patch
