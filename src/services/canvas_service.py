@@ -138,6 +138,32 @@ class CanvasService:
 
         return files
 
+    @staticmethod
+    def is_exam_assignment(
+        name: str,
+        quiz_id: Optional[int] = None,
+        is_quiz_assignment: bool = False,
+        submission_types: Optional[List[str]] = None
+    ) -> bool:
+        """Determina si una tarea de Canvas corresponde a un examen o evaluación formal."""
+        name_lower = name.lower()
+        exam_keywords = [
+            "examen", "parcial", "quiz", "test", "final", "control",
+            "avaluació", "avaluacio", "prova", "recuperación", "recuperacion"
+        ]
+        has_keyword = any(kw in name_lower for kw in exam_keywords)
+        has_quiz_type = bool(quiz_id or is_quiz_assignment or ("online_quiz" in (submission_types or [])))
+
+        # Si el nombre contiene palabras explícitas de examen/parcial/control
+        if any(k in name_lower for k in ["examen", "parcial", "final", "control", "recuperaci", "avaluaci", "prova"]):
+            return True
+
+        # Si es tipo quiz y tiene palabra clave asociada
+        if has_quiz_type and has_keyword:
+            return True
+
+        return False
+
     def get_course_assignments(self, course_id: int) -> List[CanvasAssignment]:
         """Obtiene las tareas y entregas del curso con fecha límite e información de entrega del alumno."""
         url = f"{self.base_url}/api/v1/courses/{course_id}/assignments"
@@ -180,6 +206,16 @@ class CanvasService:
                 except ValueError:
                     pass
 
+            quiz_id_val = a.get("quiz_id")
+            is_quiz_asg = bool(a.get("is_quiz_assignment", False))
+            sub_types = a.get("submission_types") or []
+            is_exam_flag = self.is_exam_assignment(
+                name=name,
+                quiz_id=quiz_id_val,
+                is_quiz_assignment=is_quiz_asg,
+                submission_types=sub_types
+            )
+
             assignments.append(CanvasAssignment(
                 id=assignment_id,
                 course_id=course_id,
@@ -193,7 +229,9 @@ class CanvasService:
                 grade=grade_val,
                 score=score_val,
                 submitted_at=sub_at_dt,
-                updated_at=a.get("updated_at")
+                updated_at=a.get("updated_at"),
+                is_exam=is_exam_flag,
+                quiz_id=quiz_id_val
             ))
 
         return assignments

@@ -1,4 +1,6 @@
+import json
 import traceback
+from datetime import datetime
 from config.settings import settings
 from src.core.logger import logger
 from src.models.schemas import SyncStats, SyncResponse
@@ -35,9 +37,12 @@ class SyncManager:
         1. Escanea las asignaturas que el usuario HA CREADO en su Google Drive (INGENIERIA / PRIMER...).
         2. Solo sincroniza aquellas que coinciden con cursos de Canvas. Cursos no creados por el alumno se omiten.
         3. Clasifica los archivos en subcarpetas de temas existentes respetando al 100% sus documentos personales.
-        4. Sincroniza entregas en Google Calendar con colores dinámicos (amarillo pendiente / verde entregado).
+        4. Sincroniza entregas y tareas en Google Calendar con notas formateadas (10/10, 7/10).
+        5. Modifica directamente los eventos de clases existentes en caso de exámenes (ej: 'Bases de l'informàtica | G20 | EXAMEN').
+        6. Emite registros exhaustivos para auditoría en Google Cloud Logging.
         """
         stats = SyncStats()
+        sync_start_time = datetime.utcnow()
         logger.info("=== INICIANDO CICLO DE SINCRONIZACIÓN INTELIGENTE ===")
 
         try:
@@ -117,9 +122,11 @@ class SyncManager:
 
                         if dest_subfolder and dest_subfolder in subfolders_map:
                             target_folder_id = subfolders_map[dest_subfolder]
+                            target_folder_label = f"{matched_folder_name}/{dest_subfolder}"
                             logger.info(f"Clasificando '{f.display_name}' en subcarpeta: '{dest_subfolder}'")
                         else:
                             target_folder_id = subject_folder_id
+                            target_folder_label = matched_folder_name
                             logger.info(f"Ubicando '{f.display_name}' en la raíz de '{matched_folder_name}'")
 
                         # Descarga por streaming y subida
@@ -129,6 +136,10 @@ class SyncManager:
 
                         if status in ("uploaded", "updated"):
                             stats.files_uploaded += 1
+                            size_str = f"{f.size / 1024:.1f} KB" if f.size < 1024 * 1024 else f"{f.size / (1024 * 1024):.1f} MB"
+                            detail = f"[{matched_folder_name}] {f.display_name} -> {target_folder_label} ({size_str})"
+                            stats.files_uploaded_list.append(detail)
+                            logger.info(f"📥 [DRIVE] {'Subido' if status == 'uploaded' else 'Actualizado'}: {detail}")
                         else:
                             stats.files_skipped += 1
 
@@ -146,7 +157,7 @@ class SyncManager:
             try:
                 assignments = self.canvas.get_course_assignments(course.id)
                 assignments_with_due = [a for a in assignments if a.due_at]
-                logger.info(f"El curso '{matched_folder_name}' tiene {len(assignments_with_due)} tareas con fecha límite.")
+                logger.info(f"El curso '{matched_folder_name}' tiene {len(assignments_with_due)} tareas o exámenes con fecha límite.")
 
                 for a in assignments_with_due:
                     try:
@@ -154,15 +165,40 @@ class SyncManager:
                         if a.description and not a.summary_ai:
                             a.summary_ai = self.ai.summarize_assignment(a.name, a.description)
 
-                        status, _ = self.calendar.sync_assignment_event(matched_folder_name, a)
-                        if status == "created":
-                            stats.calendar_events_created += 1
-                        elif status == "updated":
-                            stats.calendar_events_updated += 1
+                        if a.is_exam:
+                            status, _, event_title = self.calendar.sync_exam_event(matched_folder_name, a)
+                            due_date_str = a.due_at.strftime('%Y-%m-%d') if a.due_at else ''
+                            if status == "updated":
+                                stats.exams_linked += 1
+                                exam_detail = f"[{matched_folder_name}] {a.name} -> Modificado evento de clase: '{event_title}' ({due_date_str})"
+                                stats.exams_linked_list.append(exam_detail)
+                                logger.info(f"🎓 [EXAMEN] {exam_detail}")
+                            elif status == "created":
+                                stats.exams_linked += 1
+                                exam_detail = f"[{matched_folder_name}] {a.name} -> Creado evento examen: '{event_title}' ({due_date_str})"
+                                stats.exams_linked_list.append(exam_detail)
+                                logger.info(f"🎓 [EXAMEN] {exam_detail}")
+                            else:
+                                stats.calendar_events_skipped += 1
                         else:
-                            stats.calendar_events_skipped += 1
+                            status, _, event_title = self.calendar.sync_assignment_event(matched_folder_name, a)
+                            due_str = a.due_at.strftime('%Y-%m-%d %H:%M') if a.due_at else ''
+                            grade_disp = self.calendar.get_grade_display(a)
+                            if status == "created":
+                                stats.calendar_events_created += 1
+                                ev_detail = f"[{matched_folder_name}] {event_title} ({due_str})"
+                                stats.calendar_events_created_list.append(ev_detail)
+                                logger.info(f"📅 [CALENDAR] Creado: {ev_detail}")
+                            elif status == "updated":
+                                stats.calendar_events_updated += 1
+                                ev_detail = f"[{matched_folder_name}] {event_title} [Nota: {grade_disp or 'N/A'}]"
+                                stats.calendar_events_updated_list.append(ev_detail)
+                                logger.info(f"🔄 [CALENDAR] Actualizado: {ev_detail}")
+                            else:
+                                stats.calendar_events_skipped += 1
+
                     except Exception as ae:
-                        err = f"Error sincronizando tarea '{a.name}' ({matched_folder_name}): {ae}"
+                        err = f"Error sincronizando tarea/examen '{a.name}' ({matched_folder_name}): {ae}"
                         logger.error(err)
                         stats.errors.append(err)
 
@@ -171,13 +207,64 @@ class SyncManager:
                 logger.error(err)
                 stats.errors.append(err)
 
-        logger.info(
-            f"=== SINCRONIZACIÓN FINALIZADA ===\n"
-            f"  - Cursos activos del alumno sincronizados: {stats.courses_processed}\n"
-            f"  - Archivos subidos/actualizados: {stats.files_uploaded} (Omitidos ya existentes: {stats.files_skipped})\n"
-            f"  - Eventos de calendario creados: {stats.calendar_events_created} (Actualizados con estado: {stats.calendar_events_updated}, Omitidos: {stats.calendar_events_skipped})\n"
-            f"  - Errores encontrados: {len(stats.errors)}"
+        # 7. Informe detallado para consola y Google Cloud Logging
+        sync_duration_secs = (datetime.utcnow() - sync_start_time).total_seconds()
+
+        files_list_text = "\n".join(f"    • {item}" for item in stats.files_uploaded_list) if stats.files_uploaded_list else "    (Ningún archivo nuevo en esta ejecución)"
+        cal_created_text = "\n".join(f"    • {item}" for item in stats.calendar_events_created_list) if stats.calendar_events_created_list else "    (Ningún evento nuevo creado)"
+        cal_updated_text = "\n".join(f"    • {item}" for item in stats.calendar_events_updated_list) if stats.calendar_events_updated_list else "    (Ningún evento requirió actualización)"
+        exams_list_text = "\n".join(f"    • {item}" for item in stats.exams_linked_list) if stats.exams_linked_list else "    (No se modificaron exámenes en esta ejecución)"
+        errors_text = "\n".join(f"    ❌ {err}" for err in stats.errors) if stats.errors else "    (Sin errores)"
+
+        summary_report = (
+            f"\n"
+            f"================================================================================\n"
+            f"📊 INFORME DE AUDITORÍA Y EJECUCIÓN - SINCRONIZACIÓN CANVAS -> GOOGLE CLOUD\n"
+            f"================================================================================\n"
+            f"⏰ Duración: {sync_duration_secs:.2f}s | Cursos procesados: {stats.courses_processed}\n\n"
+            f"📂 ARCHIVOS DESCARGADOS Y SUBIDOS A GOOGLE DRIVE (Total: {stats.files_uploaded} nuevos, {stats.files_skipped} omitidos):\n"
+            f"{files_list_text}\n\n"
+            f"📅 EVENTOS DE CALENDARIO CREADOS (Total: {stats.calendar_events_created}):\n"
+            f"{cal_created_text}\n\n"
+            f"🔄 EVENTOS DE CALENDARIO ACTUALIZADOS CON CALIFICACIÓN / ESTADO (Total: {stats.calendar_events_updated}):\n"
+            f"{cal_updated_text}\n\n"
+            f"🎓 EXÁMENES VINCULADOS A CALENDARIO DE CLASES (Total: {stats.exams_linked}):\n"
+            f"{exams_list_text}\n\n"
+            f"⚠️ ERRORES ENCONTRADOS (Total: {len(stats.errors)}):\n"
+            f"{errors_text}\n"
+            f"================================================================================"
         )
+        logger.info(summary_report)
+
+        # Emisión de registro estructurado JSON para Cloud Logging en Google Cloud
+        try:
+            cloud_log_entry = {
+                "severity": "WARNING" if stats.errors else "INFO",
+                "message": (
+                    f"Canvas Sync completado: {stats.files_uploaded} archivos subidos, "
+                    f"{stats.calendar_events_created} eventos creados, "
+                    f"{stats.calendar_events_updated} actualizados, "
+                    f"{stats.exams_linked} exámenes vinculados"
+                ),
+                "sync_audit": {
+                    "duration_seconds": sync_duration_secs,
+                    "courses_processed": stats.courses_processed,
+                    "files_uploaded_count": stats.files_uploaded,
+                    "files_skipped_count": stats.files_skipped,
+                    "files_uploaded": stats.files_uploaded_list,
+                    "calendar_events_created_count": stats.calendar_events_created,
+                    "calendar_events_created": stats.calendar_events_created_list,
+                    "calendar_events_updated_count": stats.calendar_events_updated,
+                    "calendar_events_updated": stats.calendar_events_updated_list,
+                    "exams_linked_count": stats.exams_linked,
+                    "exams_linked": stats.exams_linked_list,
+                    "errors_count": len(stats.errors),
+                    "errors": stats.errors
+                }
+            }
+            print(json.dumps(cloud_log_entry, ensure_ascii=False))
+        except Exception as j_err:
+            logger.debug(f"No se pudo serializar JSON log de Cloud Logging: {j_err}")
 
         return SyncResponse(
             success=len(stats.errors) == 0,

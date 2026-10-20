@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     DRIVE_ROOT_FOLDER_NAME: str = "INGENIERIA"
     DRIVE_ROOT_FOLDER_ID: Optional[str] = "1lW4caVjGo5-NbQl7SCxwzB6nJAxOdZ1J"
     CALENDAR_NAME: str = "Canvas - Universidad"
+    CLASSES_CALENDAR_NAME: str = "CLASES"
 
     # Gemini IA
     GEMINI_API_KEY: Optional[str] = None
@@ -25,9 +26,11 @@ class Settings(BaseSettings):
     # Seguridad del servicio
     SYNC_SECRET_TOKEN: Optional[str] = None
 
-    # Configuración de ejecución
+    # Configuración de ejecución y automatización
     PORT: int = 8080
     LOG_LEVEL: str = "INFO"
+    AUTO_SYNC_INTERVAL_MINUTES: int = 30  # Sincronización automática periódica en segundo plano
+    AUTO_SYNC_ON_STARTUP: bool = True  # Dispara una sincronización al iniciar el servidor
 
     model_config = SettingsConfigDict(
         env_file=".env",

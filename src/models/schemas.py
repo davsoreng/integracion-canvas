@@ -36,6 +36,8 @@ class CanvasAssignment(BaseModel):
     submitted_at: Optional[datetime] = None
     summary_ai: Optional[str] = None
     updated_at: Optional[str] = None
+    is_exam: bool = False
+    quiz_id: Optional[int] = None
 
 
 class SyncStats(BaseModel):
@@ -45,6 +47,11 @@ class SyncStats(BaseModel):
     calendar_events_created: int = 0
     calendar_events_updated: int = 0
     calendar_events_skipped: int = 0
+    exams_linked: int = 0
+    files_uploaded_list: List[str] = Field(default_factory=list)
+    calendar_events_created_list: List[str] = Field(default_factory=list)
+    calendar_events_updated_list: List[str] = Field(default_factory=list)
+    exams_linked_list: List[str] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 
 

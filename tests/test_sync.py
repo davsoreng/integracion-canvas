@@ -132,3 +132,84 @@ def test_fastapi_endpoints():
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["status"] == "healthy"
+
+
+def test_is_exam_assignment():
+    """Valida la detección de exámenes y pruebas frente a tareas estándar."""
+    from src.services.canvas_service import CanvasService
+
+    assert CanvasService.is_exam_assignment("Examen Parcial T1-2-3", quiz_id=123, is_quiz_assignment=True) is True
+    assert CanvasService.is_exam_assignment("Parcial Tema 1-2-3", quiz_id=456) is True
+    assert CanvasService.is_exam_assignment("Control 1 de Álgebra") is True
+    assert CanvasService.is_exam_assignment("Avaluació contínua tema 2") is True
+    assert CanvasService.is_exam_assignment("Examen Final Ordinario") is True
+
+    # Tareas normales no son exámenes
+    assert CanvasService.is_exam_assignment("Tarea tema 1") is False
+    assert CanvasService.is_exam_assignment("FP · w01a · PPG: primera sesión y diagnóstico") is False
+    assert CanvasService.is_exam_assignment("Practica 1") is False
+    assert CanvasService.is_exam_assignment("ENTREGA 1 (EJERCICIOS DE LA UNIDAD 1)") is False
+
+
+def test_grade_formatting():
+    """Valida el formateo de notas en formato 'nota/total' (ej: 10/10, 7/10, 9.5/10)."""
+    from src.services.calendar_service import CalendarService
+
+    # 10/10
+    a1 = CanvasAssignment(id=1, course_id=10, name="T1", score=10.0, points_possible=10.0, grade="10")
+    assert CalendarService.get_grade_display(a1) == "10/10"
+
+    # 7/10
+    a2 = CanvasAssignment(id=2, course_id=10, name="T2", score=7.0, points_possible=10.0, grade="7")
+    assert CalendarService.get_grade_display(a2) == "7/10"
+
+    # 9.5/10
+    a3 = CanvasAssignment(id=3, course_id=10, name="T3", score=9.5, points_possible=10.0, grade="9.5")
+    assert CalendarService.get_grade_display(a3) == "9.5/10"
+
+    # 9.95/10
+    a4 = CanvasAssignment(id=4, course_id=10, name="T4", score=9.95, points_possible=10.0, grade="9.95")
+    assert CalendarService.get_grade_display(a4) == "9.95/10"
+
+    # Grado de texto 'complete'
+    a5 = CanvasAssignment(id=5, course_id=10, name="T5", grade="complete", score=1.0, points_possible=1.0)
+    # score=1.0 y points=1.0 daría 1/1
+    a5_text_only = CanvasAssignment(id=6, course_id=10, name="T6", grade="complete", points_possible=0.0)
+    assert CalendarService.get_grade_display(a5_text_only) == "complete"
+
+    # Sin corregir
+    a6 = CanvasAssignment(id=7, course_id=10, name="T7", points_possible=10.0)
+    assert CalendarService.get_grade_display(a6) is None
+
+
+def test_sync_stats_audit_lists():
+    """Valida las listas detalladas para auditoría de Cloud Logging."""
+    stats = SyncStats()
+    stats.files_uploaded_list.append("[ÀLGEBRA] Pizarra.pdf -> T1 (1.2 MB)")
+    stats.calendar_events_created_list.append("[PENDIENTE ⏳] Tarea 1")
+    stats.calendar_events_updated_list.append("[CALIFICADO: 10/10 ✅] Tarea 2")
+    stats.exams_linked_list.append("[BASES DE L'INFORMÀTICA] Examen -> Modificado clase: 'Bases | G20 | EXAMEN'")
+
+    assert len(stats.files_uploaded_list) == 1
+    assert len(stats.calendar_events_created_list) == 1
+    assert len(stats.calendar_events_updated_list) == 1
+    assert len(stats.exams_linked_list) == 1
+
+
+def test_is_course_match():
+    """Valida la correspondencia exacta entre nombres de asignaturas y eventos de clases evitando falsos positivos."""
+    from src.services.calendar_service import CalendarService
+
+    # Coincidencias correctas
+    assert CalendarService.is_course_match("FUNDAMENTS DE XARXES", "Fundaments de xarxes") is True
+    assert CalendarService.is_course_match("FUNDAMENTS DE PROGRAMACIÓ", "Fundaments de programació") is True
+    assert CalendarService.is_course_match("BASES DE L'INFORMÀTICA", "Bases de l'informàtica") is True
+    assert CalendarService.is_course_match("ANALISIS MATEMÀTIC", "Analisis Matemàtic") is True
+    assert CalendarService.is_course_match("ÀLGEBRA", "Àlgebra") is True
+
+    # Evitar falsos positivos entre cursos que comparten la palabra 'Fundaments'
+    assert CalendarService.is_course_match("FUNDAMENTS DE XARXES", "Fundaments de programació") is False
+    assert CalendarService.is_course_match("FUNDAMENTS DE PROGRAMACIÓ", "Fundaments de xarxes") is False
+    assert CalendarService.is_course_match("ÀLGEBRA", "Analisis Matemàtic") is False
+
+

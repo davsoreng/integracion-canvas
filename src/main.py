@@ -1,4 +1,6 @@
 import os
+import asyncio
+from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Security, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -10,10 +12,55 @@ from src.core.logger import logger
 from src.models.schemas import SyncResponse
 from src.services.sync_manager import SyncManager
 
+_sync_lock = asyncio.Lock()
+
+
+async def run_sync_in_background():
+    """Ejecuta un ciclo de sincronización en segundo plano de manera segura evitando solapamientos."""
+    if _sync_lock.locked():
+        logger.warning("⚠️ Ya hay una sincronización en curso. Se omite este ciclo automático.")
+        return
+    async with _sync_lock:
+        try:
+            logger.info("⏰ [AUTOMATIZACIÓN] Iniciando ciclo de sincronización en segundo plano...")
+            await asyncio.to_thread(SyncManager().run_sync)
+        except Exception as e:
+            logger.error(f"❌ [AUTOMATIZACIÓN] Error en ciclo de sincronización automático: {e}")
+
+
+async def sync_scheduler_worker():
+    """Bucle periódico en segundo plano para sincronizar Canvas automáticamente."""
+    if settings.AUTO_SYNC_ON_STARTUP:
+        logger.info("🚀 Sincronización automática de inicio programada en 5 segundos...")
+        await asyncio.sleep(5)
+        await run_sync_in_background()
+
+    interval_seconds = max(60, settings.AUTO_SYNC_INTERVAL_MINUTES * 60)
+    while True:
+        await asyncio.sleep(interval_seconds)
+        await run_sync_in_background()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler_task = None
+    if settings.AUTO_SYNC_INTERVAL_MINUTES > 0:
+        logger.info(f"🚀 Planificador automático activo (intervalo: cada {settings.AUTO_SYNC_INTERVAL_MINUTES} minutos).")
+        scheduler_task = asyncio.create_task(sync_scheduler_worker())
+    yield
+    if scheduler_task:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
+
+
 app = FastAPI(
     title="Asistente Académico Canvas -> Google Cloud",
     description="Sincronizador automático de Canvas LMS con Google Drive y Google Calendar",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Esquemas de seguridad opcionales
@@ -22,12 +69,17 @@ api_key_query = APIKeyQuery(name="token", auto_error=False)
 
 
 def verify_sync_token(
+    request: Request,
     token_header: Optional[str] = Security(api_key_header),
     token_param: Optional[str] = Security(api_key_query)
 ) -> bool:
     """Verifica el token de seguridad si está configurado en SYNC_SECRET_TOKEN."""
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "::1", "localhost"):
+        return True
+
     if not settings.SYNC_SECRET_TOKEN:
-        return True  # Si no hay token configurado, permitir ejecución libre (útil en dev o con OIDC de GCP)
+        return True
 
     provided_token = token_header or token_param
     if not provided_token or provided_token != settings.SYNC_SECRET_TOKEN:
@@ -41,15 +93,17 @@ def verify_sync_token(
 @app.get("/")
 def root():
     """Ruta raíz informativa."""
+    manual_url = "/sync/manual" + (f"?token={settings.SYNC_SECRET_TOKEN}" if settings.SYNC_SECRET_TOKEN else "")
     return {
         "service": "Asistente Académico Canvas",
         "status": "online",
         "canvas_configured": settings.is_canvas_configured(),
         "google_configured": settings.is_google_configured(),
+        "auto_sync_interval_minutes": settings.AUTO_SYNC_INTERVAL_MINUTES,
         "endpoints": {
             "health": "/health",
             "trigger_sync_post": "/sync",
-            "trigger_sync_manual_get": "/sync/manual?token=..."
+            "trigger_sync_manual_get": manual_url
         }
     }
 
@@ -83,7 +137,7 @@ def trigger_sync_manual(request: Request, token: Optional[str] = Query(None)):
     Endpoint amigable para disparar la sincronización desde el navegador de un móvil o PC
     mediante un marcador o acceso directo. Devuelve un resumen visual en HTML.
     """
-    verify_sync_token(token_param=token)
+    verify_sync_token(request=request, token_param=token)
 
     manager = SyncManager()
     result = manager.run_sync()
@@ -176,9 +230,19 @@ def trigger_sync_manual(request: Request, token: Optional[str] = Query(None)):
                 <span class="badge">{result.stats.calendar_events_created}</span>
             </div>
             <div class="metric">
-                <span>Eventos actualizados:</span>
+                <span>Eventos actualizados (notas/entregas):</span>
                 <span class="badge">{result.stats.calendar_events_updated}</span>
             </div>
+            <div class="metric">
+                <span>Exámenes vinculados a clases:</span>
+                <span class="badge">{result.stats.exams_linked}</span>
+            </div>
+
+            {"<details style='margin-top:16px;'><summary style='cursor:pointer;font-weight:600;color:#1a73e8;'>📄 Ver detalles de archivos subidos (" + str(len(result.stats.files_uploaded_list)) + ")</summary><ul style='font-size:0.85rem;padding-left:20px;color:#555;'>" + "".join(f"<li>{item}</li>" for item in result.stats.files_uploaded_list) + "</ul></details>" if result.stats.files_uploaded_list else ""}
+            {"<details style='margin-top:10px;'><summary style='cursor:pointer;font-weight:600;color:#1a73e8;'>🎓 Ver exámenes vinculados (" + str(len(result.stats.exams_linked_list)) + ")</summary><ul style='font-size:0.85rem;padding-left:20px;color:#555;'>" + "".join(f"<li>{item}</li>" for item in result.stats.exams_linked_list) + "</ul></details>" if result.stats.exams_linked_list else ""}
+            {"<details style='margin-top:10px;'><summary style='cursor:pointer;font-weight:600;color:#1a73e8;'>🔄 Ver eventos actualizados con notas (" + str(len(result.stats.calendar_events_updated_list)) + ")</summary><ul style='font-size:0.85rem;padding-left:20px;color:#555;'>" + "".join(f"<li>{item}</li>" for item in result.stats.calendar_events_updated_list) + "</ul></details>" if result.stats.calendar_events_updated_list else ""}
+            {"<details style='margin-top:10px;'><summary style='cursor:pointer;font-weight:600;color:#1a73e8;'>📅 Ver eventos creados (" + str(len(result.stats.calendar_events_created_list)) + ")</summary><ul style='font-size:0.85rem;padding-left:20px;color:#555;'>" + "".join(f"<li>{item}</li>" for item in result.stats.calendar_events_created_list) + "</ul></details>" if result.stats.calendar_events_created_list else ""}
+
             <a class="btn" href="{request.url}">🔄 Sincronizar de nuevo</a>
         </div>
     </body>
