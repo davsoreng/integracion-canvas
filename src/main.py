@@ -81,7 +81,10 @@ def verify_sync_token(
     if not settings.SYNC_SECRET_TOKEN:
         return True
 
-    provided_token = token_header or token_param
+    header_val = token_header if isinstance(token_header, str) else None
+    param_val = token_param if isinstance(token_param, str) else None
+    provided_token = header_val or param_val
+
     if not provided_token or provided_token != settings.SYNC_SECRET_TOKEN:
         raise HTTPException(
             status_code=403,
@@ -132,13 +135,11 @@ def trigger_sync(authorized: bool = Security(verify_sync_token)):
 
 
 @app.get("/sync/manual", response_class=HTMLResponse)
-def trigger_sync_manual(request: Request, token: Optional[str] = Query(None)):
+def trigger_sync_manual(request: Request, authorized: bool = Security(verify_sync_token)):
     """
     Endpoint amigable para disparar la sincronización desde el navegador de un móvil o PC
     mediante un marcador o acceso directo. Devuelve un resumen visual en HTML.
     """
-    verify_sync_token(request=request, token_param=token)
-
     manager = SyncManager()
     result = manager.run_sync()
 
