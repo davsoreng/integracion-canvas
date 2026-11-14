@@ -1,0 +1,54 @@
+name: Sincronización Académica Canvas
+
+on:
+  # 1. Ejecución programada automática (Lunes a Viernes cada 30 min en horario lectivo, y fines de semana 2 veces al día)
+  schedule:
+    - cron: '*/30 7-21 * * 1-5'
+    - cron: '0 10,18 * * 6,0'
+
+  # 2. Disparo manual bajo demanda desde la App móvil de GitHub (Pestaña Actions -> Run workflow) o vía API (Atajos del móvil)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canvas-sync-group
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sincronizar Canvas con Google Workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Descargar código del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar sincronización segura
+        env:
+          PUBLIC_LOG_MODE: "true"
+          CANVAS_BASE_URL: ${{ secrets.CANVAS_BASE_URL }}
+          CANVAS_API_TOKEN: ${{ secrets.CANVAS_API_TOKEN }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          DRIVE_ROOT_FOLDER_NAME: ${{ secrets.DRIVE_ROOT_FOLDER_NAME || 'INGENIERIA' }}
+          DRIVE_ROOT_FOLDER_ID: ${{ secrets.DRIVE_ROOT_FOLDER_ID }}
+          CALENDAR_NAME: ${{ secrets.CALENDAR_NAME || 'Canvas - Universidad' }}
+          CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
+          CLASSES_CALENDAR_NAME: ${{ secrets.CLASSES_CALENDAR_NAME || 'CLASES' }}
+          CLASSES_CALENDAR_ID: ${{ secrets.CLASSES_CALENDAR_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -m src.main

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Credenciales y Secretos (NUNCA SUBIR)
+.env
+*.json
+!credentials.template.json
+token.json
+client_secrets.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs y Caché de Tests
+*.log
+logs/
+.pytest_cache/
+
+# Recursos locales (no subir al repositorio)
+assets/
+
+# Mac / Windows
+.DS_Store
+Thumbs.db

@@ -1,0 +1,11 @@
+requests>=2.32.3
+pydantic>=2.9.2
+pydantic-settings>=2.6.0
+google-api-python-client>=2.150.0
+google-auth>=2.35.0
+google-auth-oauthlib>=1.2.1
+google-auth-httplib2>=0.2.0
+python-dotenv>=1.0.1
+google-genai>=2.31.0
+pytest>=8.3.0
+tzdata>=2024.1
